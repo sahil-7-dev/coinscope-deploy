@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens, modelled on CoinGecko: a clean light theme by default, an
+ * optional dark theme, a lime-green brand, and green/red for price moves.
+ * Components only use these semantic colors (bg-surface, text-muted, text-up…).
+ */
+:root {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #eef2f6;
+  --line: #e5e9ef;
+  --line-strong: #cbd5e1;
+  --fg: #0d1421;
+  --fg-2: #2f3a4b;
+  --muted: #4a5568;
+  --subtle: #66738a;
+  --faint: #98a2b3;
+  --brand: #4bcc00;
+  --brand-strong: #3a9f00;
+  --up: #00a83e;
+  --down: #ea3943;
+  --warn: #d97706;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1217;
+  --surface: #131a22;
+  --surface-2: #18212b;
+  --surface-3: #212c38;
+  --line: #222d39;
+  --line-strong: #344354;
+  --fg: #f2f5f8;
+  --fg-2: #cdd5df;
+  --muted: #a9b5c4;
+  --subtle: #8a98ab;
+  --faint: #5d6b7e;
+  --brand: #4bcc00;
+  --brand-strong: #6fe02c;
+  --up: #16c784;
+  --down: #ea3943;
+  --warn: #f5a524;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-faint: var(--faint);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-warn: var(--warn);
+  --shadow-card: var(--shadow);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /*
+   * Type scale (one place for the whole app). Slightly larger than Tailwind's
+   * defaults so tables and explanations stay readable:
+   * xs 13px (labels, captions) · sm 15px (body, tables) · base 16px (intros) · lg 18px (section titles).
+   */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.45rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.6rem;
+  --text-lg: 1.1875rem;
+  --text-lg--line-height: 1.6rem;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin, theme-aware scrollbars for the wide tables. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
