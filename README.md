@@ -85,10 +85,14 @@ All analysis is rules on real data: every number in the UI traces back to a form
 
 | Verdict | When |
 |---|---|
-| **Strong candidate** | Fundamental score ≥ 65, evidence ≥ 50%, narrative Accelerating / Emerging / Quiet, its narrative not **Crowded** (market context, labeled as such), valuation not stretched, risk < 70, and (if compared) ≥ 50% like a benchmark |
+| **Strong candidate** | Fundamental score ≥ 65, evidence ≥ 50%, narrative Accelerating or Quiet, its narrative not **Crowded** (market context, labeled as such), valuation not stretched, and risk < 70. Benchmark fit is shown as context, not required: a coin unlike your benchmark can still be strong, and the summary says so |
 | **Watchlist** | Decent but something's missing; the page lists exactly what would make it strong |
 | **Speculative** | The story is ahead of the evidence: a good narrative but weak or unmeasurable usage |
-| **Avoid** | High-severity red flag, extreme risk, weak fundamentals with no early narrative, or no measurable usage at all |
+| **Avoid** | High-severity red flag, extreme risk, weak fundamentals with no accelerating narrative, or no measurable usage at all |
+
+Emerging narratives (builders arriving, fees not yet beating the market) no longer count toward a Strong verdict or keep a weak coin out of Avoid: coins in them did worse than average in the backtest (−4.6%, below Fading). An Emerging story can still make a weak-evidence coin Speculative.
+
+Coins in categories fees don't measure (privacy, payments, proof of work, storage, DePIN, IoT, wireless) and with no fee data get "unmeasured" instead of a penalty in adoption, value capture and valuation. It's still not evidence, so their confidence stays low, and they skip the "no measurable usage" Avoid rule.
 
 Scores of 70+ carry a caution: in the backtest they were often reached at peak activity (fee spikes) and did worse than 50–69.
 
@@ -136,20 +140,20 @@ A new stage must hold **20 days** before it shows. The stage check (Backtest pag
 
 `src/lib/analysis/strategy-backtest.ts`, run from the Backtest page as a background job with progress:
 
-- **Universe:** top Binance coins by volume plus every **delisted** pair (which reduces survivorship bias), daily prices since 2021, with a liquidity filter on each day.
+- **Universe:** the top 300 trading Binance coins by today's volume (adjustable) plus every **delisted** pair (which reduces survivorship bias), daily prices since 2021, with a liquidity filter on each day. Picking by today's volume still favors coins that are doing well now, and only coins Binance listed are included.
 - **Point in time:** each day's score uses only data available before that day (fees lag a day). Categories that need data which only exists today (supply, audits, listings, your ratings) are left out and listed on the page.
 - **Statistics:** returns after trading costs; one hold at a time per coin for signal stats; a 90% range for the edge from a month-clustered bootstrap; daily rank correlation (information coefficient) per factor; bull vs bear (BTC vs its 200-day average); year by year. Holds are capped at +500%, and histories are cut at redenominations.
 
-**Latest result** (2026-11-22, 60-day holds, 0.5% costs, ~127k coin-days, fundamentals-only stages, evidence-adjusted scores):
+**Latest result** (2026-11-23, 60-day holds, 0.5% costs, ~126k coin-days, fundamentals-only stages, evidence-adjusted scores):
 
 | | |
 |---|---|
-| Fundamental score's rank correlation with forward returns | **0.150**, right on **89%** of days (the earlier score with technical factors: 0.036) |
-| Score ≥ 60 vs all coins | +0.2% vs −4.6%: **+4.8% edge**, 90% range −3.3% to +13.5%; bear markets +14.5% vs −1.4% |
-| By score | <40: −5.8% · 40–49: −0.6% · 50–59: +2.3% · 60–69: +0.1% · 70+: −5.5% |
-| Narrative stages (fundamentals only) | Accelerating +2.8% (best) · Quiet +0.9% · Fading −2.2% · Maturing −4.1% · Emerging −4.8% |
-| Attention (context) | Unnoticed +1.3% · Noticed −2.9% · Crowded −7.8% |
-| Strongest factors | Track record 0.125 · share of fees to holders 0.065 · fee level 0.055 · usage vs price 0.052 · fee growth (90d) 0.043 |
+| Fundamental score's rank correlation with forward returns | **0.153**, right on **90%** of days (the earlier score with technical factors: 0.036) |
+| Score ≥ 60 vs all coins | +0.9% vs −4.8%: **+5.6% edge**, 90% range −2.6% to +14.5% (includes zero); bear markets +14.5% vs −1.5%, bull markets −7.5% vs −7.3% (no edge) |
+| By score | <40: −6.4% · 40–49: −0.9% · 50–59: +1.2% · 60–69: +0.6% · 70+: −5.5%. Most of the edge comes from low scores doing badly: the score is better at ruling coins out than in |
+| Narrative stages (fundamentals only) | Accelerating +2.7% (best) · Quiet +1.0% · Fading −1.2% · Maturing −2.7% · Emerging −4.6% |
+| Attention (context) | Unnoticed +1.6% · Noticed −2.7% · Crowded −8.1% |
+| Strongest factors | Track record 0.132 · share of fees to holders 0.066 · usage vs price 0.064 · fee growth (90d) 0.056 · fee level 0.052 |
 | Technical factors (earlier test) | Price vs 50-day average −0.035, 90-day momentum −0.020: they hurt, so the app doesn't use them |
 
 **Robustness checks** (shown on the Backtest page with every run):
@@ -159,9 +163,11 @@ A new stage must hold **20 days** before it shows. The stage check (Backtest pag
 | By period | Before 2024: correlation 0.128, edge +8.8% · 2024 onward: 0.172, edge +4.0%. It works in both, not just one stretch |
 | 50 random weight sets (each 0.5–1.5×) | Correlation 0.143–0.155, edge +4.7% to +7.5%, positive in 100% of runs |
 | Stage ordering before vs after tuning on this data | 0.151 vs 0.151: the tuning isn't what drives the result |
+| Against simpler rules (same share of coin-days picked) | Score 0.153, edge +5.6% · age only 0.132, edge **−6.7%** (the very oldest coins did badly) · fees yes/no 0.083, edge +3.9% · score without age 0.109, edge +6.6% |
+| Score with age held constant | **0.097**, right on 76% of days: the fundamentals add information beyond "older coins do better" |
 | Leave one category out | Team & execution matters most (0.109 without it, mostly track record); adoption, value capture and valuation add little on top here, partly because only ~120 of ~440 coins have fee data |
 
-The rules are marked **frozen on 2026-11-22**. Every backtest reports results on data after that date separately: the only truly out-of-sample test, which fills in as time passes. Stage strengths and the fee-spike taper were adjusted using pre-freeze data, so the earlier numbers are in-sample.
+The rules are marked **frozen on 2026-11-23** (moved from 2026-11-22 after the verdict and fee-model changes above). Every backtest reports results on data after that date separately: the only truly out-of-sample test, which fills in as time passes. Stage strengths and the fee-spike taper were adjusted using pre-freeze data, so the earlier numbers are in-sample.
 
 ## Data sources
 
@@ -343,6 +349,7 @@ Everything stays on your machine in `data/coinscope.db`, or in a [Turso](https:/
 ## Roadmap
 
 - [ ] Holder concentration for Ethereum tokens (Ethplorer, free)
-- [ ] Check the "after the rules were frozen" period once a few months of new data exist
+- [ ] Check the "after the rules were frozen" period once a few months of new data exist (no rule changes before then)
+- [ ] At that review: consider age as a filter (rule out young coins) rather than a score component: the score without age picked better (+6.6% vs +5.6%), though it ranked worse
 - [ ] Automatic daily watchlist refresh
 - [ ] Stock support via a second `AssetProvider`
