@@ -2,7 +2,9 @@
 
 A running log of what has been built, the decisions behind it, and what's next. Newest entries go at the top of the **Log**.
 
-**Status (2026-11-22):** fundamentals-first research tool. Narratives, Coin Check verdicts, per-coin research reports and a multi-year backtest are built and tested on live data. Runs locally; the database can now be Turso for hosting on Vercel (not deployed yet).
+**Status (2026-11-24):** early-discovery experiment in progress on branch `experiment/early-discovery`. Methodology v1.0 signed off and frozen (`06e3402`); the H0 harness is built and tested but **not yet reviewed, frozen or run**. See *Early-discovery experiment* below.
+
+Fundamentals-first research tool. Narratives, Coin Check verdicts, per-coin research reports and a multi-year backtest are built and tested on live data. Runs locally; the database can now be Turso for hosting on Vercel (not deployed yet).
 
 ---
 
@@ -91,11 +93,27 @@ Typecheck ✅ Lint ✅ Production build ✅. Screenshots checked: Coin (Aave), N
 - Not deployed, so it's local only.
 - **Narrative stages aren't a validated buy signal:** the stage check found no stage reliably picked the narratives that did better over the next 90 days (2021–2026). They describe fundamentals.
 
+## Early-discovery experiment: where it stands
+
+Tests whether CoinScope flags future big movers **early** (not whether scores correlate with returns). Protocol: `docs/early-discovery-methodology.md`.
+
+| Step | State |
+|---|---|
+| Methodology v1.0 (hit definitions, D+1 entry, date-matched baseline, bootstrap, pass/fail) | ✅ Signed off, frozen at `06e3402` |
+| App + scoring rules baseline commit | ✅ `06e3402` (hash recorded in `b1a342b`) |
+| H0 harness (`discovery.ts`, `discovery-backtest.ts`, `discovery-report.ts`, `/api/discovery-backtest`) + 33 synthetic tests | ✅ Built, committed as work in progress (**not** the harness freeze) |
+| Review of the harness and the 16 proposed v1.1 implementation decisions (methodology §13) | ⏳ Next |
+| Decide on a data pre-flight check (fee-series coverage before any outcome is computed) | ⏳ Recommended: DefiLlama download failures dropped fee coverage from 120 to 105 coins between two runs |
+| Harness freeze commit, hash recorded in the methodology | ⏳ After review |
+| Run H0 once, save results to `results/discovery/` | ⏳ After the freeze. **Don't run before then**, and don't adjust the score to rescue a failed result |
+| H1 (acceleration flag) | Not before H0's results are saved; definition must be locked first (§12) |
+
+Rules for continuing: no new scoring features; no methodology additions beyond what review requires; every change goes through the change log.
+
 ## Next steps (suggested order)
 1. [ ] Log every real buy and pass in the Journal; review after ~20 decisions are 30+ days old
 1. [ ] Use Coin Check with a real benchmark (e.g. ZEC for privacy) and fill in Your research for a few coins
-2. [ ] Out-of-sample check: rerun the backtest in a few months on data the rules weren't tuned on
-4. [ ] Commit to git (nothing beyond the starter template is committed)
+2. [ ] Out-of-sample check: rerun the backtest in a few months on data the rules weren't tuned on. No rule changes until then (frozen 2026-11-23)
 5. [ ] Holder concentration for Ethereum tokens (Ethplorer, free)
 6. [ ] Automatic daily watchlist refresh
 7. [ ] Stock support: an `AssetProvider` for a stock API
@@ -111,11 +129,30 @@ Keys go in `.env.local`: `COINGECKO_API_KEY` (required for speed), and optionall
 
 ## Log
 
+### 2026-11-23: Vercel region set to Mumbai
+- On Vercel, Binance returned HTTP 451 because Vercel runs server code in Washington, D.C. (`iad1`) by default and Binance blocks US IPs. `vercel.json` now pins functions to `bom1` (Mumbai). No Binance key is needed; only public endpoints are used.
+
 ### 2026-11-23: Turso support (for hosting on Vercel)
 - Vercel's disk is read-only and its `/tmp` is temporary and not shared, so the local SQLite file can't work there. The database layer (`src/lib/server/db.ts`) now uses `@libsql/client`: **Turso** when `TURSO_DATABASE_URL` (+ `TURSO_AUTH_TOKEN`) is set, otherwise the same local file `data/coinscope.db` as before. Same tables and SQL.
 - Every database function is now async; ~50 call sites across 20 files await them. `narrativeAt()` takes the narratives data as an argument (loaded once per winner comparison) instead of reading the database inside a loop. The price-history cache read now sits inside the in-flight promise, so concurrent requests still download a coin at most once. API usage counting stays best-effort (a database error never breaks a data call).
 - `npm run db:migrate-turso` copies local data into Turso: skips the price/HTTP caches (they refill; `--with-cache` copies them) and any table Turso already has rows in, so re-running is safe.
 - Checked: tsc, ESLint, 90 tests, production build, and the built app against a copy of the local database (library, watchlist, research and thesis events, benchmark choices, journal, backtest result, narratives, API meter).
+
+### 2026-11-24: Early-discovery H0 harness (pending review)
+- **Methodology** `docs/early-discovery-methodology.md`: drafted v0.1 → v0.3 through three review rounds, signed off as **v1.0** and frozen with the app at `06e3402` on branch `experiment/early-discovery`.
+- **Harness** built: pure mechanics in `src/lib/analysis/discovery.ts`, real-data runner `discovery-backtest.ts` (reuses the frozen replay; writes JSON + Markdown to `results/discovery/`), report `discovery-report.ts`, endpoint `/api/discovery-backtest` (refuses with uncommitted changes, and refuses a second run without a recorded reason).
+- **Strategy backtest refactor:** loading and per-coin-day scoring moved into exported functions shared with the harness. Verified **byte-identical** output against the frozen version on the same data.
+- **Missing fee series** now listed in the harness report (a failed DefiLlama download scores as "no fees").
+- 16 implementation decisions written up as proposed **v1.1** (§13), pending review. `cspell.json` added for the editor's spell-check notices.
+- Tests: 127 (33 new, synthetic).
+
+### 2026-11-23: Verdict and fee-model fixes, age baseline (from a second ChatGPT review); rules re-frozen
+- **Benchmark fit is no longer a gate** for a Strong verdict, only context ("Unlike your benchmark…" in the summary).
+- **Emerging** no longer counts toward Strong or keeps a weak or no-usage coin out of Avoid (coins in Emerging narratives: −4.6% in the backtest, below Fading). It can still make a weak-evidence coin Speculative.
+- **Coins fees don't measure** (privacy, payments, proof of work, storage, DePIN, IoT, wireless; from CoinGecko categories live, sector lists in the backtest) score "unmeasured" (45) instead of 25/20/15 when they have no fees, still without counting as evidence, and skip the no-usage Avoid rule.
+- **Backtest baselines:** the score against age only, fees yes/no and the score without age, each picking the same share of coin-days, plus the score's correlation with age held constant. Result: 0.153 vs age only 0.132; **0.097 with age held constant**, so the fundamentals add something beyond age. Age only picked badly (edge −6.7%); the score without age picked better than the full score (+6.6% vs +5.6%) though it ranked worse (0.109). Not acted on: the rules are frozen.
+- Still true: the edge's 90% range includes zero, it all comes from bear markets, and 60–69 scores barely beat 50–59.
+- `RULES_FROZEN_AT` moved to **2026-11-23**. Tests: 93 (4 new verdict tests; the benchmark-gate test was replaced).
 
 ### 2026-11-22: More free data (from the public-apis list)
 - Reviewed ~140 crypto/blockchain APIs in public-apis; tested the promising ones live. Added four; skipped the rest (exchanges, paid, chain-specific, or empty data such as AlphaGrowth "users").
