@@ -2,7 +2,9 @@
 
 **Fundamentals-first crypto research and narrative discovery.** Find narratives whose fundamentals improve before the crowd notices, compare coins against ones that already performed well, and get a plain verdict for each coin you're researching. No technical analysis, no AI, free data only.
 
-![Next.js](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6) ![Tailwind](https://img.shields.io/badge/Tailwind-v4-38bdf8) ![SQLite](https://img.shields.io/badge/SQLite-libSQL%20%2F%20Turso-003b57) ![Data](https://img.shields.io/badge/data-free%20APIs%20only-16a34a)
+**[Live demo → coinscope-deploy-f5it.vercel.app](https://coinscope-deploy-f5it.vercel.app/)**
+
+[![Live demo](https://img.shields.io/badge/demo-live-16a34a?logo=vercel)](https://coinscope-deploy-f5it.vercel.app/) ![Next.js](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6) ![Tailwind](https://img.shields.io/badge/Tailwind-v4-38bdf8) ![SQLite](https://img.shields.io/badge/SQLite-libSQL%20%2F%20Turso-003b57) ![Data](https://img.shields.io/badge/data-free%20APIs%20only-16a34a)
 
 > Research tool, not financial advice. Verdicts are screens that tell you what to research next.
 
@@ -20,7 +22,10 @@
   - [Backtest](#backtest)
 - [Data sources](#data-sources)
 - [API budget and caching](#api-budget-and-caching)
+- [Live pages](#live-pages)
 - [Getting started](#getting-started)
+- [Deployment](#deployment)
+- [SEO](#seo)
 - [Project structure](#project-structure)
 - [API routes](#api-routes)
 - [Local data](#local-data)
@@ -201,6 +206,20 @@ The CoinGecko Demo plan allows **100 calls/minute but only 10,000/month**, so th
 
 GitHub allows 60 requests/hour without a token (each coin's developer activity costs 2–3 and is cached a day). A free `GITHUB_TOKEN` raises that to 5,000.
 
+## Live pages
+
+| Page | Link |
+|---|---|
+| Market | [coinscope-deploy-f5it.vercel.app](https://coinscope-deploy-f5it.vercel.app/) |
+| Narratives | [/narratives](https://coinscope-deploy-f5it.vercel.app/narratives) |
+| Winners | [/winners](https://coinscope-deploy-f5it.vercel.app/winners) |
+| Coin Check | [/similarity](https://coinscope-deploy-f5it.vercel.app/similarity) (example: [SUI and ONDO vs Zcash](https://coinscope-deploy-f5it.vercel.app/similarity?coins=SUI,ONDO&benchmarks=zcash)) |
+| Coin report | [/coin/zcash](https://coinscope-deploy-f5it.vercel.app/coin/zcash) |
+| Backtest | [/backtest](https://coinscope-deploy-f5it.vercel.app/backtest) |
+| Analyze & Score | [/analyze](https://coinscope-deploy-f5it.vercel.app/analyze) |
+
+The demo shares one CoinGecko Demo key (10,000 calls/month), so pages can fall back to cached or backup data late in the month. Watchlist, Library and Journal on the demo are shared by everyone who opens it; run your own copy for private research.
+
 ## Getting started
 
 **Requirements:** Node.js **22.5+** and a free [CoinGecko Demo key](https://www.coingecko.com/en/api).
@@ -226,6 +245,7 @@ The first visit to Narratives or the Backtest downloads years of daily prices fr
 | `COINSCOPE_DB` | No | `data/coinscope.db` | Where the local database lives |
 | `TURSO_DATABASE_URL` | On Vercel | — | Hosted Turso database (`libsql://…`); used instead of the local file when set |
 | `TURSO_AUTH_TOKEN` | With Turso | — | Turso database token |
+| `NEXT_PUBLIC_SITE_URL` | No | Vercel production domain, else `http://localhost:3000` | Public URL used for canonical links, the sitemap, `robots.txt` and share previews |
 
 ### Scripts
 
@@ -238,12 +258,35 @@ The first visit to Narratives or the Backtest downloads years of daily prices fr
 | `npm run db:migrate-turso` | Copies the local database into Turso (skips caches and tables Turso already has rows in; `-- --with-cache` copies caches too) |
 | `npm test` | Unit tests (Vitest, 90 tests) for the scorecard, verdicts, thesis checks, narrative rules, the stage check, comparisons, winner patterns, run detection, the decision journal, unlocks, holder concentration and price matching |
 
+## Deployment
+
+The live demo runs on **Vercel** with a **Turso** database:
+
+1. Create a Turso database and copy your local data into it: set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in `.env.local`, then `npm run db:migrate-turso`.
+2. Import the repo in Vercel and add `COINGECKO_API_KEY`, `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` (plus any optional variables) under **Settings → Environment Variables**. Set `NEXT_PUBLIC_SITE_URL` if you use a custom domain.
+3. Deploy. `vercel.json` pins functions to Mumbai (`bom1`) because Binance blocks US IPs (HTTP 451) and Vercel's default region is Washington, D.C.
+
+Vercel's disk is read-only, so the app needs Turso there; locally it uses `data/coinscope.db`.
+
+## SEO
+
+- **Titles and descriptions** for every page, plus canonical URLs and Open Graph / Twitter tags (`pageMetadata()` in `src/lib/site.ts`). Most pages are client components, so their metadata lives in each route's `layout.tsx`. Coin and narrative pages build their titles from the URL id (e.g. "Zcash Fundamentals & Research Report"), with no extra API calls.
+- **Share image:** a generated 1200×630 preview (`src/app/opengraph-image.tsx`) for X, LinkedIn, Slack and Discord.
+- **`/sitemap.xml`:** the main pages plus 20 well-known coin reports (a fixed list, so it costs no CoinGecko calls).
+- **`/robots.txt`:** blocks `/api/` so crawlers don't spend the CoinGecko budget, and the personal pages.
+- **`noindex`** on Watchlist, Library and Journal, which hold the user's own data.
+- **JSON-LD** (`WebApplication`, free, finance) and a web manifest.
+
 ## Project structure
 
 ```
 crypto-analyzer/
 ├── src/
 │   ├── app/                        Next.js App Router pages and API routes
+│   │   ├── layout.tsx              Root layout, site metadata, JSON-LD
+│   │   ├── sitemap.ts  robots.ts   sitemap.xml and robots.txt
+│   │   ├── opengraph-image.tsx     Generated share image
+│   │   ├── manifest.ts             Web manifest
 │   │   ├── page.tsx                Market
 │   │   ├── narratives/             Narrative stages, changes feed, builders and capital
 │   │   │   └── [id]/               One narrative: ranked coins, stage history, builder sources
@@ -283,9 +326,11 @@ crypto-analyzer/
 │       │   └── crypto.ts, types.ts AssetProvider interface and its crypto implementation
 │       ├── server/                 cache.ts (memory + disk), db.ts (SQLite), history.ts (price store), thesis-log.ts (thesis history),
 │       │                           jobs.ts (background jobs), http.ts
+│       ├── site.ts                 Site name, URL, description, keywords, pageMetadata()
 │       └── types.ts                Shared types
 ├── data/                           Local SQLite database (git-ignored)
 ├── scripts/                        migrate-to-turso.mjs (copies local data into Turso)
+├── vercel.json                     Pins functions to Mumbai (bom1)
 ├── PROGRESS.md                     Running log of decisions and work
 └── .env.example                    Environment variable template
 ```
@@ -344,7 +389,8 @@ Everything stays on your machine in `data/coinscope.db`, or in a [Turso](https:/
 - **Pre-run snapshots** have no TVL, listings or developer data (no cheap history). Runs older than CoinGecko's one-year window use an estimated market cap (today's circulating supply), and coins not on Binance only have that one year of runs. Narrative stages only go back a year.
 - **Builders per narrative** count launches across whole DefiLlama categories its coins belong to, not projects tagged to the narrative itself.
 - **Funding and integrations** (early-narrative signals in the original framework) have no free source and aren't included.
-- Unit tests cover the pure rules; data providers and pages have no automated tests. Runs locally (not deployed).
+- Unit tests cover the pure rules; data providers and pages have no automated tests.
+- **No accounts:** the live demo has one shared database, so anyone who opens it sees and edits the same Watchlist, Library, Journal and research notes.
 
 ## Roadmap
 

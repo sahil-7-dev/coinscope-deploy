@@ -4,7 +4,7 @@ A running log of what has been built, the decisions behind it, and what's next. 
 
 **Status (2026-11-24):** early-discovery experiment in progress on branch `experiment/early-discovery`. Methodology v1.0 signed off and frozen (`06e3402`); the H0 harness is built and tested but **not yet reviewed, frozen or run**. See *Early-discovery experiment* below.
 
-Fundamentals-first research tool. Narratives, Coin Check verdicts, per-coin research reports and a multi-year backtest are built and tested on live data. Runs locally; the database can now be Turso for hosting on Vercel (not deployed yet).
+Fundamentals-first research tool. Narratives, Coin Check verdicts, per-coin research reports and a multi-year backtest are built and tested on live data. Deployed on Vercel with a Turso database: https://coinscope-deploy-f5it.vercel.app/ (the SEO changes of 2026-11-27 go live with the next push).
 
 ---
 
@@ -128,6 +128,11 @@ Keys go in `.env.local`: `COINGECKO_API_KEY` (required for speed), and optionall
 ---
 
 ## Log
+
+### 2026-11-27: SEO
+- `src/lib/site.ts` holds the site name, URL (`NEXT_PUBLIC_SITE_URL`, else Vercel's production domain), description and keywords; `pageMetadata()` gives each page its title, description, canonical URL and share tags.
+- Every page has its own title and description (route `layout.tsx` files, since the pages are client components); coin and narrative pages get titles from their id, with no extra API calls.
+- Added `sitemap.xml` (main pages plus 20 well-known coin reports), `robots.txt` (blocks `/api/` so crawlers don't use the CoinGecko budget, and the personal pages), a generated 1200×630 share image, a web manifest and WebApplication JSON-LD. Watchlist, Library and Journal are `noindex`.
 
 ### 2026-11-23: Vercel region set to Mumbai
 - On Vercel, Binance returned HTTP 451 because Vercel runs server code in Washington, D.C. (`iad1`) by default and Binance blocks US IPs. `vercel.json` now pins functions to `bom1` (Mumbai). No Binance key is needed; only public endpoints are used.
