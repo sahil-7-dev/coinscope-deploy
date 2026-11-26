@@ -15,34 +15,35 @@ import { setKv } from "@/lib/server/db";
 import { pairBars } from "@/lib/server/history";
 import type { JobProgress } from "@/lib/server/jobs";
 import type { NarrativeAttention, NarrativeStage, StrategyBacktestResult, StrategyOptions, StrategyStats, StrategyValidation, ValidationRun } from "@/lib/types";
+import { feesExpected } from "./categories";
 import { CATEGORIES, combineCategories, scoreFundamentals, usageVsPrice, type CategoryKey, type Evidence, type FaInputs } from "./fundamentals";
-import { buildersAt, buildSectors, marketLaunchesAt } from "./narratives";
+import { buildersAt, buildSectors, marketLaunchesAt, type SectorBuild } from "./narratives";
 import { listingTimes } from "@/lib/providers/defillama";
 import { marketFees, MIN_FEE_MEMBERS, narrativeAttention, narrativeStage, phaseSeries, readingAt, STAGE_STRENGTH, summarizeFees } from "./narrative-rules";
 
 export const LATEST_KEY = "backtest:strategy:latest";
 /** Date the scoring rules last changed. Results on data after this are the only truly out-of-sample ones. */
-export const RULES_FROZEN_AT = "2026-11-22";
+export const RULES_FROZEN_AT = "2026-11-23";
 /** Where the period check splits: the earlier period holds most of what the rules were tuned on. */
 const PERIOD_SPLIT = "2024-01-01";
 const RANDOM_WEIGHT_RUNS = 50;
 /** The narrative stage ordering before it was adjusted on this backtest's data. */
 const ORIGINAL_STAGE_STRENGTH: Record<NarrativeStage, number> = { Emerging: 85, Accelerating: 80, Quiet: 55, Maturing: 45, Fading: 20 };
-const STEP_DAYS = 3;
+export const STEP_DAYS = 3;
 /** 30-day average volume (USDT) a coin needed that day to count, so it was actually buyable. */
-const MIN_LIQUIDITY = 1e6;
+export const MIN_LIQUIDITY = 1e6;
 /** Days of history before a coin is scored (the 90-day checks need it). */
-const MIN_AGE = 100;
+export const MIN_AGE = 100;
 /** Each day's cross-section needs this many coins for a factor correlation. */
 const MIN_CROSS_SECTION = 20;
 const BOOTSTRAP_RUNS = 1000;
 const DAY = 86_400_000;
 /** A single hold's return is capped here so one freak pump can't swing an average of 100,000+ holds. */
-const MAX_RETURN = 5;
+export const MAX_RETURN = 5;
 /** An overnight move bigger than this (either way) is a redenomination or a reused ticker, not a real price. */
 const MAX_OVERNIGHT = 5;
 /** Scorecard categories with at least one input that can be replayed historically. */
-const REPLAYED: CategoryKey[] = ["narrative", "adoption", "valueCapture", "execution", "valuation"];
+export const REPLAYED: CategoryKey[] = ["narrative", "adoption", "valueCapture", "execution", "valuation"];
 
 const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
 
@@ -90,7 +91,7 @@ function feeGrowth(f: FlowLookup, date: string) {
 
 // ---- Per-coin series ----
 
-interface CoinSeries {
+export interface CoinSeries {
   pair: SpotPair;
   closes: number[];
   pos: Map<string, number>;
@@ -99,6 +100,8 @@ interface CoinSeries {
   revenue: FlowLookup | null;
   holders: FlowLookup | null;
   sectors: number[];
+  /** Fees are the right yardstick for it (not a privacy, payments, storage or DePIN coin, by today's sector lists). */
+  feesExpected: boolean;
 }
 
 /** Drops everything before the last impossible overnight jump, so prices on both sides of it are never compared. */
@@ -124,6 +127,7 @@ function coinSeries(pair: SpotPair, raw: DailyBar[], flows: Partial<Record<FlowT
     revenue: lookup(flows.dailyRevenue),
     holders: lookup(flows.dailyHoldersRevenue),
     sectors: [],
+    feesExpected: true,
   };
 }
 
@@ -241,17 +245,31 @@ function pearson(a: number[], b: number[]): number | null {
   return va && vb ? cov / Math.sqrt(va * vb) : null;
 }
 
-// ---- Main ----
+// ---- Replay data (shared with the early-discovery harness) ----
 
-export async function runStrategyBacktest(opts: StrategyOptions, report: (p: JobProgress) => void): Promise<StrategyBacktestResult> {
-  const started = Date.now();
-  const h = opts.horizonDays;
+/** Everything a replay needs, loaded once: each coin's prices and fee flows, sector memberships, BTC. */
+export interface ReplayData {
+  coins: CoinSeries[];
+  sectors: SectorBuild[];
+  btcDates: string[];
+  btc: number[];
+  times: Awaited<ReturnType<typeof listingTimes>> | null;
+  /** Trading pairs' base symbols by today's 24h volume, highest first (for a top-N universe). */
+  tradingByVolume: string[];
+  /** Coins DefiLlama lists fees for whose fee series didn't load (a failed download scores as "no fees"). */
+  feeSeriesMissing: string[];
+}
 
+/**
+ * The universe: trading pairs (the top `maxCoins` by today's volume, or all of them when 0)
+ * plus every delisted pair, keeping coins with at least `minBars` cleaned daily bars.
+ */
+export async function loadReplay(maxCoins: number, minBars: number, report: (p: JobProgress) => void): Promise<ReplayData> {
   report({ stage: "Loading the coin list", done: 0, total: 0 });
   const [pairs, vols, feeSources] = await Promise.all([spotUsdtPairs(), quoteVolumes24h(), feeSourcesBySymbol()]);
   const all = [...pairs.values()].filter((p) => p.base !== "BTC");
   const trading = all.filter((p) => p.status === "TRADING").sort((a, b) => (vols.get(b.symbol) ?? 0) - (vols.get(a.symbol) ?? 0));
-  const universe = [...(opts.maxCoins ? trading.slice(0, opts.maxCoins) : trading), ...all.filter((p) => p.status === "BREAK")];
+  const universe = [...(maxCoins ? trading.slice(0, maxCoins) : trading), ...all.filter((p) => p.status === "BREAK")];
 
   report({ stage: "Loading narratives (sector indexes and their fees)", done: 0, total: 0 });
   const [{ sectors, btcBars }, times] = await Promise.all([buildSectors(), listingTimes().catch(() => null)]);
@@ -277,11 +295,10 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
   const flows = new Map<string, Partial<Record<FlowType, FlowSeries | null>>>();
   flowJobs.forEach((j, i) => flows.set(j.base, { ...flows.get(j.base), [j.type]: flowList[i] }));
 
-  report({ stage: "Scoring every coin, every 3 days", done: 0, total: 0 });
   const coins: CoinSeries[] = [];
   universe.forEach((p, i) => {
     const c = coinSeries(p, barsList[i], flows.get(p.base) ?? {});
-    if (c.closes.length >= MIN_AGE + h) coins.push(c);
+    if (c.closes.length >= minBars) coins.push(c);
   });
 
   // Sector membership by ticker, checked against price so ticker clashes don't mix coins up.
@@ -294,24 +311,32 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
       if (!c.sectors.includes(k)) c.sectors.push(k);
     }
   });
+  for (const c of coins) c.feesExpected = feesExpected(c.sectors.map((k) => sectors[k].name));
 
-  const btcDates = btcBars.map((b) => b.date);
-  const btc = btcBars.map((b) => b.close);
-  const btcSum: number[] = [];
-  btc.forEach((c, i) => btcSum.push((btcSum[i - 1] ?? 0) + c));
-  const btcSma200 = (b: number) => (b >= 199 ? (btcSum[b] - (b >= 200 ? btcSum[b - 200] : 0)) / 200 : null);
-  const testDays: number[] = [];
-  for (let b = 199; b + h < btcDates.length; b += STEP_DAYS) testDays.push(b);
+  const feeSeriesMissing = universe.filter((p) => feeSources.has(p.base) && !flows.get(p.base)?.dailyFees).map((p) => p.base);
+  return { coins, sectors, btcDates: btcBars.map((b) => b.date), btc: btcBars.map((b) => b.close), times, tradingByVolume: trading.map((p) => p.base), feeSeriesMissing };
+}
 
-  // Narrative stage (fundamentals only: fees vs market, builders) and attention (price vs BTC) per sector on each test day.
+/** Bull market on BTC day `b`: BTC's close above the average of its last 200 closes (that day's included). Needs b >= 199. */
+export function btcBullAt(btc: number[]): (b: number) => boolean {
+  const sum: number[] = [];
+  btc.forEach((c, i) => sum.push((sum[i - 1] ?? 0) + c));
+  return (b) => btc[b] > (sum[b] - (b >= 200 ? sum[b - 200] : 0)) / 200;
+}
+
+export type DayNarrative = NonNullable<FaInputs["narrative"]> & { attention: NarrativeAttention };
+
+/** Each sector's stage (fundamentals only: fees vs market, builders) and attention (price vs BTC) on each test day. */
+export function sectorStages(data: ReplayData, testDays: number[]): Map<number, DayNarrative>[] {
+  const { sectors, btcDates, times } = data;
   const sectorFees = sectors.map((s) => s.fees.map((f) => lookup(f.series)).filter((f): f is FlowLookup => f !== null));
   const allFees = [...new Map(sectors.flatMap((s) => s.fees.map((f) => [f.symbol, lookup(f.series)] as const))).values()].filter(
     (f): f is FlowLookup => f !== null,
   );
   const marketByDay = new Map(testDays.map((b) => [b, marketFees(allFees.map((f) => feeGrowth(f, btcDates[b])))]));
-  const stages = sectors.map((s, k) => {
+  return sectors.map((s, k) => {
     const phases = phaseSeries(s.index);
-    const out = new Map<number, { sector: string; stage: NarrativeStage; strength: number; attention: NarrativeAttention }>();
+    const out = new Map<number, DayNarrative>();
     for (const b of testDays) {
       const fees = summarizeFees(sectorFees[k].map((f) => feeGrowth(f, btcDates[b])));
       const atSec = Date.parse(`${btcDates[b]}T00:00:00Z`) / 1000;
@@ -320,11 +345,90 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
     }
     return out;
   });
+}
+
+/** The coin's strongest narrative on test day `b`. */
+export function coinNarrative(c: CoinSeries, stages: Map<number, DayNarrative>[], b: number): DayNarrative | null {
+  let narrative: DayNarrative | null = null;
+  for (const s of c.sectors) {
+    const n = stages[s].get(b);
+    if (n && (!narrative || n.strength > narrative.strength)) narrative = n;
+  }
+  return narrative;
+}
+
+/** Scorecard inputs for coin `c` on date `d` (its bar `i`), using only data available before that day. */
+export function coinDayInputs(c: CoinSeries, d: string, i: number, narrative: DayNarrative | null): FaInputs {
+  const price = c.closes[i];
+  const f30 = c.fees ? windowSum(c.fees, d, 0, 30) : null;
+  const hasFees = f30 !== null && f30 > 0;
+  const g = hasFees && c.fees ? feeGrowth(c.fees, d) : { g30: null, g90: null };
+  const share = (l: FlowLookup | null) => {
+    if (!hasFees || !l) return null;
+    const v = windowSum(l, d, 0, 30);
+    return v === null ? null : Math.min(1, v / (f30 as number));
+  };
+  const holders30 = hasFees && c.holders ? windowSum(c.holders, d, 0, 30) : null;
+  return {
+    hasFees,
+    feesExpected: c.feesExpected,
+    feesGrowth30d: g.g30,
+    feesGrowth90d: g.g90,
+    feesAnnualized: hasFees ? (f30 as number) * (365 / 30) : null,
+    tvlChange7d: null,
+    // Same rule as live: fees but no holder payouts on record = holders get nothing.
+    holderShare: hasFees ? (share(c.holders) ?? 0) : null,
+    revenueShare: share(c.revenue),
+    holdersRevenueAnnualized: holders30 !== null ? holders30 * (365 / 30) : null,
+    circulatingRatio: null,
+    inflation: null,
+    fdvToMcap: null,
+    // No unlock history: today's calendar only.
+    unlocks90: null,
+    category: null,
+    categoryShare: null,
+    categoryRank: null,
+    categoryPeers: null,
+    commits4w: null,
+    devCommits12w: null,
+    devTrend: null,
+    contributors: null,
+    governance90d: null,
+    stablecoinChange30d: null,
+    chainLaunches90d: null,
+    // Days since the coin's first Binance price: a stand-in for its age.
+    ageDays: i,
+    audits: null,
+    hacks: null,
+    tier1: null,
+    priceToFees: null,
+    priceToSales: null,
+    mcapToTvl: null,
+    usageVsPrice: hasFees ? usageVsPrice(g.g90, price / c.closes[i - 90] - 1) : null,
+    narrativeLoaded: true,
+    narrative,
+    ratings: null,
+  };
+}
+
+// ---- Main ----
+
+export async function runStrategyBacktest(opts: StrategyOptions, report: (p: JobProgress) => void): Promise<StrategyBacktestResult> {
+  const started = Date.now();
+  const h = opts.horizonDays;
+
+  const data = await loadReplay(opts.maxCoins, MIN_AGE + h, report);
+  const { coins, btcDates, btc } = data;
+  report({ stage: "Scoring every coin, every 3 days", done: 0, total: 0 });
+
+  const bullAt = btcBullAt(btc);
+  const testDays: number[] = [];
+  for (let b = 199; b + h < btcDates.length; b += STEP_DAYS) testDays.push(b);
+  const stages = sectorStages(data, testDays);
 
   const obs: Obs[] = [];
   for (const b of testDays) {
     const d = btcDates[b];
-    const sma = btcSma200(b) as number;
     const btcFwd = btc[b + h] / btc[b] - 1;
 
     coins.forEach((c, k) => {
@@ -338,60 +442,8 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
         delistedExit = true;
       } else return;
 
-      const price = c.closes[i];
-      const f30 = c.fees ? windowSum(c.fees, d, 0, 30) : null;
-      const hasFees = f30 !== null && f30 > 0;
-      const g = hasFees && c.fees ? feeGrowth(c.fees, d) : { g30: null, g90: null };
-      const share = (l: FlowLookup | null) => {
-        if (!hasFees || !l) return null;
-        const v = windowSum(l, d, 0, 30);
-        return v === null ? null : Math.min(1, v / (f30 as number));
-      };
-      const holders30 = hasFees && c.holders ? windowSum(c.holders, d, 0, 30) : null;
-      let narrative: (NonNullable<FaInputs["narrative"]> & { attention: NarrativeAttention }) | null = null;
-      for (const s of c.sectors) {
-        const n = stages[s].get(b);
-        if (n && (!narrative || n.strength > narrative.strength)) narrative = n;
-      }
-      const inputs: FaInputs = {
-        hasFees,
-        feesGrowth30d: g.g30,
-        feesGrowth90d: g.g90,
-        feesAnnualized: hasFees ? (f30 as number) * (365 / 30) : null,
-        tvlChange7d: null,
-        // Same rule as live: fees but no holder payouts on record = holders get nothing.
-        holderShare: hasFees ? (share(c.holders) ?? 0) : null,
-        revenueShare: share(c.revenue),
-        holdersRevenueAnnualized: holders30 !== null ? holders30 * (365 / 30) : null,
-        circulatingRatio: null,
-        inflation: null,
-        fdvToMcap: null,
-        // No unlock history: today's calendar only.
-        unlocks90: null,
-        category: null,
-        categoryShare: null,
-        categoryRank: null,
-        categoryPeers: null,
-        commits4w: null,
-        devCommits12w: null,
-        devTrend: null,
-        contributors: null,
-        governance90d: null,
-        stablecoinChange30d: null,
-        chainLaunches90d: null,
-        // Days since the coin's first Binance price: a stand-in for its age.
-        ageDays: i,
-        audits: null,
-        hacks: null,
-        tier1: null,
-        priceToFees: null,
-        priceToSales: null,
-        mcapToTvl: null,
-        usageVsPrice: hasFees ? usageVsPrice(g.g90, price / c.closes[i - 90] - 1) : null,
-        narrativeLoaded: true,
-        narrative,
-        ratings: null,
-      };
+      const narrative = coinNarrative(c, stages, b);
+      const inputs = coinDayInputs(c, d, i, narrative);
       const fa = scoreFundamentals(inputs, { evidenceBase: REPLAYED });
       const score = fa.score;
       if (score === null) return;
@@ -399,10 +451,10 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
         coin: k,
         t: b,
         score,
-        ret: Math.min(MAX_RETURN, exit / price - 1) - opts.cost,
+        ret: Math.min(MAX_RETURN, exit / c.closes[i] - 1) - opts.cost,
         btc: btcFwd,
-        bull: btc[b] > sma,
-        hasFees,
+        bull: bullAt(b),
+        hasFees: inputs.hasFees,
         stage: narrative?.stage ?? null,
         attention: narrative?.attention ?? null,
         delistedExit,
@@ -481,6 +533,7 @@ export async function runStrategyBacktest(opts: StrategyOptions, report: (p: Job
     "Narratives use today's sector lists. Coins that are big in a sector today are partly there because they did well, which flatters narrative stages in the past.",
     `A narrative's stage uses only fundamentals: fee growth vs the market (needs fee data for at least ${MIN_FEE_MEMBERS} of its coins) and new protocol launches around its coins. Attention (price vs BTC) is reported separately and never scored.`,
     "Only coins Binance listed are included. Coins Binance delisted are included up to their last day; a hold that runs past delisting exits at the last price.",
+    "Privacy, payments, storage and DePIN coins without fees are scored as unknown rather than weak; which coins those are comes from today's sector lists.",
     "Prices and volumes are Binance spot. Fees come from DefiLlama, matched by ticker, so a few tickers may map to the wrong protocol.",
     "The score buckets count every coin every 3 days, so neighboring rows overlap. The signal stats use one hold at a time per coin.",
     `A single hold's return is capped at +${MAX_RETURN * 100}%, and a coin's history is cut at any overnight move over ${MAX_OVERNIGHT}× (redenominations, reused tickers), so a broken price series can't dominate the averages.`,
@@ -619,6 +672,21 @@ function validate(obs: Obs[], dates: string[], opts: StrategyOptions): StrategyV
   const ics = randomRuns.flatMap((r) => (r.ic === null ? [] : [r.ic]));
   const edges = randomRuns.flatMap((r) => (r.edge === null ? [] : [r.edge]));
 
+  // Baselines: does the scorecard beat simpler rules? Each picks the same share of coin-days as the score does at its threshold.
+  const pickShare = baseScores.filter((s) => s >= opts.threshold).length / baseScores.length;
+  const against = (label: string, scores: (number | null)[]) => {
+    const known = scores.filter((s): s is number => s !== null);
+    const cutoff = quantile(known, 1 - pickShare) ?? Infinity;
+    return evaluate(label, obs, scores, { ...opts, threshold: cutoff });
+  };
+  const exec = keys.indexOf("execution");
+  const baselines = [
+    evaluate("Fundamental score", obs, baseScores, opts),
+    against("Age only (older coins first)", obs.map((o) => o.x.ageDays)),
+    against("Fees tracked or not (yes/no)", obs.map((o) => (o.hasFees ? 1 : 0))),
+    against("Score without age (execution removed)", rescore(baseWeights.map((x, k) => (k === exec ? 0 : x)))),
+  ];
+
   const noNarrative = baseWeights.map((x, k) => (k === narr ? 0 : x));
   const stageVariants = [
     evaluate("Current order (Accelerating first)", obs, baseScores, opts),
@@ -641,5 +709,37 @@ function validate(obs: Obs[], dates: string[], opts: StrategyOptions): StrategyV
       positiveEdgeShare: edges.length ? edges.filter((e) => e > 0).length / edges.length : null,
     },
     stageVariants,
+    baselines,
+    pickShare,
+    beyondAge: partialIc(obs, baseScores, (o) => o.x.ageDays),
   };
+}
+
+/**
+ * The score's daily rank correlation with returns once age is held constant (partial correlation):
+ * what the scorecard knows that "older coins do better" doesn't.
+ */
+function partialIc(obs: Obs[], scores: number[], control: (o: Obs) => number | null): { ic: number | null; positiveShare: number | null } {
+  const byDay = new Map<number, { s: number; c: number; ret: number }[]>();
+  obs.forEach((o, i) => {
+    const c = control(o);
+    if (c === null) return;
+    const row = { s: scores[i], c, ret: o.ret };
+    const day = byDay.get(o.t);
+    if (day) day.push(row);
+    else byDay.set(o.t, [row]);
+  });
+  const ics: number[] = [];
+  for (const day of byDay.values()) {
+    if (day.length < MIN_CROSS_SECTION) continue;
+    const s = ranks(day.map((d) => d.s));
+    const c = ranks(day.map((d) => d.c));
+    const r = ranks(day.map((d) => d.ret));
+    const sr = pearson(s, r);
+    const sc = pearson(s, c);
+    const cr = pearson(c, r);
+    if (sr === null || sc === null || cr === null || Math.abs(sc) >= 1 || Math.abs(cr) >= 1) continue;
+    ics.push((sr - sc * cr) / Math.sqrt((1 - sc ** 2) * (1 - cr ** 2)));
+  }
+  return { ic: ics.length ? ics.reduce((a, b) => a + b, 0) / ics.length : null, positiveShare: ics.length ? ics.filter((v) => v > 0).length / ics.length : null };
 }

@@ -845,6 +845,12 @@ export interface StrategyValidation {
   randomWeights: { runs: number; icMin: number | null; icMedian: number | null; icMax: number | null; edgeMin: number | null; edgeMedian: number | null; edgeMax: number | null; positiveEdgeShare: number | null };
   /** Narrative stage orderings compared, including the one before it was tuned on this data. */
   stageVariants: ValidationRun[];
+  /** The score against simpler rules (age only, fees yes/no), each picking the same share of coin-days. Missing on runs before 2026-11-23. */
+  baselines?: ValidationRun[];
+  /** Share of coin-days the score picks at the threshold (what each baseline is matched to). */
+  pickShare?: number;
+  /** The score's rank correlation with returns with age held constant. */
+  beyondAge?: { ic: number | null; positiveShare: number | null };
 }
 
 // ---- Checklist ----

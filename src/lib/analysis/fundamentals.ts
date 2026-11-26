@@ -6,6 +6,7 @@
 
 import type { CoinProfile, CoinResearch, NarrativeStage, Tone } from "@/lib/types";
 import { fmtNum, fmtPct, fmtUsd, fmtX } from "@/lib/format";
+import { feesExpected } from "./categories";
 import { curve, logCurve } from "./curves";
 import type { ProfileCore } from "./drivers";
 
@@ -25,6 +26,8 @@ export const CATEGORIES: { key: CategoryKey; label: string; weight: number; why:
 /** Plain numbers the scorecard reads, so past days can be scored the same way. */
 export interface FaInputs {
   hasFees: boolean;
+  /** False for business models fees don't measure (privacy, payments, storage, DePIN): no fees there is unknown, not a weakness. */
+  feesExpected: boolean;
   feesGrowth30d: number | null;
   feesGrowth90d: number | null;
   feesAnnualized: number | null;
@@ -105,6 +108,7 @@ export interface FundamentalScore {
 export function faInputsWith(known: Partial<FaInputs> = {}): FaInputs {
   return {
     hasFees: false,
+    feesExpected: true,
     feesGrowth30d: null,
     feesGrowth90d: null,
     feesAnnualized: null,
@@ -167,6 +171,8 @@ const GROWTH: [number, number][] = [
 
 function categoryMetrics(key: CategoryKey, i: FaInputs): ScoreMetric[] {
   const r = i.ratings;
+  // Not fee-based and no fees: still not evidence, but scored as unknown rather than as weak.
+  const unmeasured = !i.hasFees && !i.feesExpected;
   switch (key) {
     case "useCase":
       return [rating("Your rating", r?.useCase, 1)];
@@ -174,6 +180,7 @@ function categoryMetrics(key: CategoryKey, i: FaInputs): ScoreMetric[] {
       if (i.narrative) return [{ label: "Narrative stage", display: `${i.narrative.stage} (${i.narrative.sector})`, score: i.narrative.strength, weight: 1 }];
       return i.narrativeLoaded ? [fallback("Narrative stage", "No tracked narrative", 30)] : [{ label: "Narrative stage", display: "Not loaded", score: null, weight: 1 }];
     case "adoption":
+      if (unmeasured) return [fallback("Fees", "Not a fee-based model: unmeasured", UNKNOWN_SCORE)];
       if (!i.hasFees) return [fallback("Fees", "None tracked on DefiLlama", 25)];
       return [
         m("Fee growth (90d vs prior 90d)", i.feesGrowth90d, pct, (v) => curve(GROWTH, v), 40),
@@ -185,6 +192,7 @@ function categoryMetrics(key: CategoryKey, i: FaInputs): ScoreMetric[] {
         m("New protocols on chain (90d)", i.chainLaunches90d, fmtNum, (v) => logCurve([[1, 10], [5, 40], [20, 70], [60, 100]], Math.max(v, 1)), 10),
       ];
     case "valueCapture":
+      if (unmeasured) return [fallback("Value capture", "Not a fee-based model: unmeasured", UNKNOWN_SCORE)];
       if (!i.hasFees) return [fallback("Value capture", "No fee data", 20)];
       return [
         // Holders revenue missing while fees exist means holders get nothing measurable.
@@ -238,7 +246,7 @@ function categoryMetrics(key: CategoryKey, i: FaInputs): ScoreMetric[] {
       ];
     }
     case "valuation":
-      if (!i.hasFees && !known(i.mcapToTvl)) return [fallback("Valuation", "Nothing to anchor it to", 15)];
+      if (!i.hasFees && !known(i.mcapToTvl)) return [fallback("Valuation", "Nothing to anchor it to", unmeasured ? UNKNOWN_SCORE : 15)];
       return [
         m("Usage vs price (90d)", i.usageVsPrice, pct, (v) => curve([[-0.5, 10], [0, 50], [0.5, 85], [1.5, 100]], v), 35),
         m("Price-to-fees", i.priceToFees, fmtX, (v) => logCurve([[3, 100], [10, 90], [30, 70], [100, 40], [300, 15], [1000, 0]], v), 30),
@@ -331,6 +339,7 @@ export function faInputs(p: ProfileCore, research?: CoinResearch | null): FaInpu
   const last = f?.hacks?.last;
   return {
     hasFees: f?.feesAnnualized != null,
+    feesExpected: feesExpected(p.categories ?? []),
     feesGrowth30d: f?.feesGrowth30d ?? null,
     feesGrowth90d: f?.feesGrowth90d ?? null,
     feesAnnualized: f?.feesAnnualized ?? null,

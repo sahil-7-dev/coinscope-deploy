@@ -9,6 +9,7 @@
 
 import type { CoinProfile, CoinResearch, NarrativeStage, Tone } from "@/lib/types";
 import { fmtPct } from "@/lib/format";
+import { feesExpected } from "./categories";
 import { fundamentalsFor, type FundamentalScore } from "./fundamentals";
 import { assumptionLabel, thesisStatus, type ThesisStatus } from "./thesis";
 
@@ -47,9 +48,14 @@ export const VERDICT_RULES = {
 };
 
 const R = VERDICT_RULES;
-/** Stages that don't block a strong verdict: early, or quiet (strong fundamentals before the crowd notices). */
-const GOOD_STAGES: NarrativeStage[] = ["Emerging", "Accelerating", "Quiet"];
-const EARLY_STAGES: NarrativeStage[] = ["Emerging", "Accelerating"];
+// In the 2021–2026 backtest, coins in Accelerating narratives did best (+2.8%) and Quiet ones beat the average,
+// while Emerging (builders arriving, fees not yet beating the market) did worse than Fading (−4.8% vs −2.2%).
+/** Stages that don't block a strong verdict: fees accelerating, or quiet (strong fundamentals before the crowd notices). */
+const GOOD_STAGES: NarrativeStage[] = ["Accelerating", "Quiet"];
+/** The only stage that keeps weak or unmeasured fundamentals out of Avoid: the narrative's fees are already growing. */
+const RESCUE_STAGES: NarrativeStage[] = ["Accelerating"];
+/** A story the market can bet on before the evidence: makes a weak-evidence coin Speculative rather than Watchlist. */
+const STORY_STAGES: NarrativeStage[] = ["Emerging", "Accelerating"];
 
 const META: Record<VerdictKind, [string, Tone]> = {
   strong: ["Strong candidate", "good"],
@@ -86,22 +92,27 @@ export function verdictFor(p: CoinProfile, opts: { match?: MatchInfo | null; res
   for (const s of fa.strengths.slice(0, 3)) reasons.push({ tone: "good", text: s });
   for (const w of fa.weaknesses.slice(0, 3)) reasons.push({ tone: "bad", text: w });
   if (n) {
-    const tone: Tone = EARLY_STAGES.includes(n.stage) ? "good" : n.stage === "Quiet" ? "neutral" : "warn";
-    reasons.push({ tone, text: `Narrative: ${n.sector}'s fundamentals are ${n.stage.toLowerCase()}.` });
+    const tone: Tone = n.stage === "Accelerating" ? "good" : n.stage === "Quiet" || n.stage === "Emerging" ? "neutral" : "warn";
+    const note = n.stage === "Emerging" ? " Builders are arriving but its fees aren't beating the market yet; coins in Emerging narratives did worse than average in the backtest." : "";
+    reasons.push({ tone, text: `Narrative: ${n.sector}'s fundamentals are ${n.stage.toLowerCase()}.${note}` });
     if (n.attention === "Crowded") {
       reasons.push({ tone: "warn", text: `Market context (not fundamentals): ${n.sector} already ran hard against BTC, so expectations are high.` });
     }
   } else {
     reasons.push({ tone: "neutral", text: p.narrativeLoaded ? "Not part of any tracked narrative." : "Narrative data not loaded yet (open the Narratives page once)." });
   }
+  // Benchmark fit is research context, not a gate: a good coin doesn't have to look like yesterday's winner.
   if (match) {
     reasons.push({
-      tone: match.score >= 65 ? "good" : match.score >= R.matchMin ? "neutral" : "warn",
-      text: `Fundamentally ${match.score}% like ${match.reference}${match.score >= R.matchMin ? "" : ": a different profile from your benchmark"}.`,
+      tone: match.score >= 65 ? "good" : "neutral",
+      text: `Fundamentally ${match.score}% like ${match.reference}${match.score >= R.matchMin ? "" : ": a different profile from your benchmark, so judge it on its own numbers"}.`,
     });
   }
   if (risk !== null) reasons.push({ tone: risk >= R.riskMax ? "bad" : risk >= 45 ? "neutral" : "good", text: `Risk ${risk}/100 (${p.scores.risk.label.toLowerCase()}): volatility, liquidity, dilution and size.` });
   for (const flag of highFlags) reasons.push({ tone: "bad", text: `Red flag: ${flag.title}.` });
+  // Privacy, payments, storage, DePIN: fees aren't how these earn, so missing fee data is unknown rather than "no usage".
+  const unmeasured = adoption?.evidence === "fallback" && !feesExpected(p.categories ?? []);
+  if (unmeasured) reasons.push({ tone: "neutral", text: "Fees aren't how its category earns, so missing fee data counts as unknown, not as weak usage." });
   const thesis = opts.research ? thesisStatus(opts.research, p) : null;
   for (const b of thesis?.broken ?? []) {
     reasons.push({ tone: "bad", text: `Your thesis: “${assumptionLabel(b.assumption)}” no longer holds (${b.rule}; now ${b.current}).` });
@@ -124,13 +135,13 @@ export function verdictFor(p: CoinProfile, opts: { match?: MatchInfo | null; res
   // ---- Avoid ----
   if (highFlags.length) return make("avoid", `Serious red flag: ${highFlags[0].title.toLowerCase()}.`);
   if (risk !== null && risk >= R.riskAvoid) return make("avoid", `Extreme risk (${risk}/100): very volatile, thin or heavily diluted.`);
-  if (score < R.faAvoid && !(n && EARLY_STAGES.includes(n.stage))) return make("avoid", `Weak fundamentals (${score}/100) and no early narrative to make up for it.`);
+  if (score < R.faAvoid && !(n && RESCUE_STAGES.includes(n.stage))) return make("avoid", `Weak fundamentals (${score}/100) and no accelerating narrative to make up for it.`);
   // No measurable usage and nothing early about its narrative: listings and tokenomics alone don't make a fundamentals case.
-  const noUsage = adoption?.evidence === "fallback";
+  const noUsage = adoption?.evidence === "fallback" && !unmeasured;
   const believer = (opts.research?.ratings.useCase ?? 0) >= 7;
-  if (noUsage && !believer && !(n && EARLY_STAGES.includes(n.stage))) {
-    return make("avoid", "No measurable usage (no fees on DefiLlama) and no early narrative: doesn't fit a fundamentals strategy.", [
-      "Usage data appears, its narrative turns early, or your research rates its use case 7/10 or higher.",
+  if (noUsage && !believer && !(n && RESCUE_STAGES.includes(n.stage))) {
+    return make("avoid", "No measurable usage (no fees on DefiLlama) and no accelerating narrative: doesn't fit a fundamentals strategy.", [
+      "Usage data appears, its narrative's fees start accelerating, or your research rates its use case 7/10 or higher.",
     ]);
   }
 
@@ -139,25 +150,25 @@ export function verdictFor(p: CoinProfile, opts: { match?: MatchInfo | null; res
   if (score < R.faStrong) unmet.push(`Its fundamental score reaches ${R.faStrong}+ (now ${score}).`);
   if (fa.confidence < R.confidenceStrong) unmet.push(`More of the thesis is backed by evidence (${fmtPct(fa.confidence, { signed: false, digits: 0 })} now): rate it in Your research, or wait for usage data.`);
   if (!n) unmet.push(p.narrativeLoaded ? "It becomes part of an emerging or accelerating narrative." : "Narrative data is loaded (open the Narratives page).");
-  else if (!GOOD_STAGES.includes(n.stage)) unmet.push(`Its narrative's fundamentals (${n.sector}) turn emerging or accelerating (now ${n.stage.toLowerCase()}).`);
+  else if (!GOOD_STAGES.includes(n.stage)) unmet.push(`Its narrative's fees (${n.sector}) start accelerating (now ${n.stage.toLowerCase()}).`);
   // Market context, kept out of the score: buying into a narrative that already ran is a timing risk.
   if (n?.attention === "Crowded") unmet.push(`${n.sector} cools off after its run (market context, not a fundamental issue).`);
   if (valuation?.score != null && valuation.score < R.valuationMin) unmet.push(`It gets cheaper for its usage (valuation ${valuation.score}/100).`);
   if (risk !== null && risk >= R.riskMax) unmet.push(`Risk drops below ${R.riskMax} (now ${risk}).`);
-  if (match && match.score < R.matchMin) unmet.push(`Its fundamentals look more like your benchmark's (${R.matchMin}%+, now ${match.score}%).`);
   // Your own assumptions are rules too: a broken one rules out a strong verdict.
   for (const b of thesis?.broken ?? []) unmet.push(`Your assumption holds again: ${assumptionLabel(b.assumption)}.`);
 
   if (!unmet.length) {
+    const unlike = match && match.score < R.matchMin ? ` Unlike your benchmark (${match.score}% like ${match.reference}), so this isn't a repeat of that pattern.` : "";
     return make(
       "strong",
-      n?.stage === "Quiet"
+      (n?.stage === "Quiet"
         ? `Real fundamentals in a narrative (${n.sector}) the market isn't watching yet, at a reasonable valuation. Worth deeper research.`
-        : `Real, growing fundamentals in a narrative whose fundamentals are ${n?.stage.toLowerCase()} (${n?.sector}), at a reasonable valuation. Worth deeper research.`,
+        : `Real, growing fundamentals in a narrative whose fees are accelerating (${n?.sector}), at a reasonable valuation. Worth deeper research.`) + unlike,
     );
   }
   // The story is ahead of the evidence: a good narrative but weak or unmeasurable usage.
-  if ((score < R.faWatch || noUsage || fa.confidence < R.confidenceLow) && n && EARLY_STAGES.includes(n.stage)) {
+  if ((score < R.faWatch || noUsage || fa.confidence < R.confidenceLow) && n && STORY_STAGES.includes(n.stage)) {
     return make(
       "speculative",
       noUsage ? `Riding the ${n.sector} narrative without measurable usage: a bet on the story, not the fundamentals.` : `The ${n.sector} narrative is ahead of the evidence: fundamentals are ${fa.label.toLowerCase()}.`,
