@@ -546,10 +546,26 @@ function RunTable({ rows, first }: { rows: (ValidationRun & { from?: string; to?
   );
 }
 
+/** Does the scorecard know more than "older coins do better"? */
+function baselineVerdict(v: StrategyValidation): { tone: Tone; text: string } | null {
+  const score = v.baselines?.[0];
+  const age = v.baselines?.find((b) => b.label.startsWith("Age only"));
+  const beyond = v.beyondAge?.ic ?? null;
+  if (!score || !age || score.ic === null || age.ic === null || beyond === null) return null;
+  if (beyond >= 0.03 && score.ic > age.ic) {
+    return { tone: "good", text: `The score beats age alone (${icText(score.ic)} vs ${icText(age.ic)}) and still ranks coins with age held constant (${icText(beyond)}): the fundamentals add something.` };
+  }
+  if (beyond > 0) {
+    return { tone: "warn", text: `Mostly age: with age held constant the score's correlation is only ${icText(beyond)}. The fundamentals add little beyond "older coins do better" so far.` };
+  }
+  return { tone: "bad", text: `Age explains it: with age held constant the score's correlation is ${icText(beyond)}. The fundamentals don't add anything beyond coin age here.` };
+}
+
 function Robustness({ v }: { v: StrategyValidation }) {
   const verdict = robustnessVerdict(v);
   const rw = v.randomWeights;
   const biggest = [...v.leaveOneOut].sort((a, b) => (a.ic ?? 1) - (b.ic ?? 1))[0];
+  const vsBaselines = baselineVerdict(v);
   return (
     <Card>
       <SectionTitle title="Robustness" subtitle="Is the result real, or a product of one period, the exact weights, or tuning on this data?" />
@@ -558,6 +574,28 @@ function Robustness({ v }: { v: StrategyValidation }) {
         <span className="text-sm text-fg">{verdict.text}</span>
       </div>
       <div className="mt-4 grid gap-6 lg:grid-cols-2">
+        {v.baselines && (
+          <div className="lg:col-span-2">
+            <h3 className="mb-1 text-sm font-bold text-fg">Against simpler rules</h3>
+            <p className="mb-2 text-xs text-subtle">
+              Track record (coin age) is the strongest single factor, and young tokens are known to underperform. If &quot;just pick older coins&quot; does as well as the
+              score, the fundamentals aren&apos;t adding anything yet. Each rule picks the same share of coin-days as the score ({fmtPct(v.pickShare ?? null, { signed: false, digits: 0 })}
+              ), except fees yes/no, which can only pick every coin with fees or none.
+            </p>
+            {vsBaselines && (
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Badge tone={vsBaselines.tone}>{vsBaselines.tone === "good" ? "Adds to age" : vsBaselines.tone === "warn" ? "Mostly age" : "Just age"}</Badge>
+                <span className="text-sm text-fg">{vsBaselines.text}</span>
+              </div>
+            )}
+            <RunTable rows={v.baselines} first="Rule" />
+            {v.beyondAge && (
+              <p className="mt-2 text-sm text-fg-2">
+                Score with age held constant: correlation <b>{icText(v.beyondAge.ic)}</b>, right on {fmtPct(v.beyondAge.positiveShare, { signed: false, digits: 0 })} of days.
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <h3 className="mb-1 text-sm font-bold text-fg">By period</h3>
           <p className="mb-2 text-xs text-subtle">
